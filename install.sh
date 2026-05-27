@@ -228,6 +228,43 @@ if ! inject_bootloader; then
 fi
 
 # ==============================================================================
+# FASE 3.5: Early Boot & Initramfs Synchronization
+# ==============================================================================
+print_info "Fase 3.5: Configurando Early KMS y Microcódigo (Arranque de Bajo Nivel)..."
+
+configure_mkinitcpio() {
+    local mk_conf="/etc/mkinitcpio.conf"
+    if [ ! -f "$mk_conf" ]; then
+        print_warn "Archivo $mk_conf no encontrado. Saltando configuración de Early KMS."
+        return 0
+    fi
+
+    # 1. Inyectar módulos de NVIDIA para Early KMS
+    if ! grep -q "nvidia_drm" "$mk_conf"; then
+        # Reemplazar la primera coincidencia de MODULES=(...) asegurando que no se rompan las comillas/paréntesis
+        sed -i 's/^MODULES=(/MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm /' "$mk_conf" || true
+        # Si la línea MODULES="" es usada en su lugar
+        sed -i 's/^MODULES="/MODULES="nvidia nvidia_modeset nvidia_uvm nvidia_drm /' "$mk_conf" || true
+        print_success "Módulos de NVIDIA (Early KMS) inyectados en $mk_conf."
+    fi
+
+    # 2. Asegurar el hook de microcódigo después de autodetect
+    if ! grep -E -q "HOOKS=.*microcode" "$mk_conf"; then
+        sed -i 's/\(HOOKS=(.*autodetect\)/\1 microcode/' "$mk_conf" || true
+        sed -i 's/\(HOOKS=".*autodetect\)/\1 microcode/' "$mk_conf" || true
+        print_success "Hook de microcódigo inyectado en $mk_conf."
+    fi
+
+    print_info "Sincronizando y reconstruyendo Ramdisk inicial..."
+    if ! mkinitcpio -P >/dev/null 2>&1; then
+        die "Fallo Crítico: mkinitcpio no pudo regenerar las imágenes de arranque. El sistema podría no iniciar."
+    fi
+    print_success "Initramfs reconstruido y sincronizado exitosamente."
+}
+
+configure_mkinitcpio
+
+# ==============================================================================
 # FASE 4: AUR y NPU de Intel
 # ==============================================================================
 print_info "Fase 4: Configurando AUR y Compilando Unidad Neuronal (NPU)..."
