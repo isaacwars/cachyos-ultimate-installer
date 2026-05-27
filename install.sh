@@ -102,6 +102,7 @@ print_info "Inyectando nvidia-drm.modeset=1 en el gestor de arranque..."
 # Inyección inteligente para systemd-boot
 if [ -d "/boot/loader/entries" ]; then
     for conf in /boot/loader/entries/*.conf; do
+        [ -e "$conf" ] || continue
         if ! grep -q "nvidia-drm.modeset=1" "$conf"; then
             sed -i 's/^options .*/& nvidia-drm.modeset=1/' "$conf"
         fi
