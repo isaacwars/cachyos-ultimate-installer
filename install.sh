@@ -99,24 +99,48 @@ pacman -S --needed --noconfirm \
     nvidia-open-dkms nvidia-utils nvidia-settings lib32-nvidia-utils
 
 print_info "Inyectando nvidia-drm.modeset=1 en el gestor de arranque..."
-# Inyección inteligente para systemd-boot
-if [ -d "/boot/loader/entries" ]; then
+INJECTED=false
+
+# 1. Intentar inyectar en systemd-boot (si existen archivos .conf)
+if ls /boot/loader/entries/*.conf 1> /dev/null 2>&1; then
     for conf in /boot/loader/entries/*.conf; do
-        [ -e "$conf" ] || continue
         if ! grep -q "nvidia-drm.modeset=1" "$conf"; then
             sed -i 's/^options .*/& nvidia-drm.modeset=1/' "$conf"
         fi
     done
-    print_success "Parámetros inyectados en systemd-boot."
-# Inyección inteligente para GRUB
-elif [ -f "/etc/default/grub" ]; then
+    print_success "Parámetros de NVIDIA inyectados en las entradas de systemd-boot."
+    INJECTED=true
+fi
+
+# 2. Intentar inyectar en GRUB
+if [ -f "/etc/default/grub" ]; then
     if ! grep -q "nvidia-drm.modeset=1" /etc/default/grub; then
         sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/&nvidia-drm.modeset=1 /' /etc/default/grub
-        grub-mkconfig -o /boot/grub/grub.cfg
-        print_success "Parámetros inyectados en GRUB."
+        grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1
+        print_success "Parámetros de NVIDIA inyectados en GRUB."
     fi
-else
-    print_warn "Gestor de arranque desconocido. Añade nvidia-drm.modeset=1 manualmente a tu configuración."
+    INJECTED=true
+fi
+
+# 3. Inyectar en configuración global de Kernel (Para kernel-install futuro)
+if [ -d "/etc/kernel" ]; then
+    if [ -f "/etc/kernel/cmdline" ]; then
+        if ! grep -q "nvidia-drm.modeset=1" /etc/kernel/cmdline; then
+            sed -i 's/$/ nvidia-drm.modeset=1/' /etc/kernel/cmdline
+            print_success "Parámetros añadidos a /etc/kernel/cmdline."
+        fi
+    else
+        echo "nvidia-drm.modeset=1" > /etc/kernel/cmdline
+        print_success "Archivo /etc/kernel/cmdline generado para futuras instalaciones."
+    fi
+    INJECTED=true
+fi
+
+# 4. Fallo Crítico si no se inyectó en ningún lado
+if [ "$INJECTED" = false ]; then
+    print_error "Fallo Crítico: No se encontró ningún gestor de arranque (systemd-boot/GRUB) válido."
+    print_error "Debes añadir 'nvidia-drm.modeset=1' manualmente al kernel, de lo contrario NVIDIA Blackwell fallará en Wayland."
+    exit 1
 fi
 
 # ==============================================================================
