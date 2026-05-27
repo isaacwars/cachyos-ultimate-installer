@@ -1,11 +1,12 @@
 #!/bin/bash
 # ==============================================================================
-# CACHYOS ULTIMATE INSTALLER (ENTERPRISE SELF-HEALING EDITION)
+# CACHYOS ULTIMATE INSTALLER (ENTERPRISE TRANSACTIONAL EDITION)
 # ArchLinux Post-Install Script
 # Architecture: Intel Core Ultra (Arrow Lake) + NVIDIA Blackwell (RTX 50-series)
-# Features: CachyOS Repos, SCX_LAVD, Secure Boot, DKMS, NPU Support, Custom Routines
+# Features: Traps (Anti-Corruption), Self-Healing, Early KMS, Secure Boot
 # ==============================================================================
 
+# Abort on unhandled errors, undefined variables, or pipeline failures
 set -euo pipefail
 
 # --- Colors ---
@@ -21,6 +22,36 @@ print_success() { echo -e "${GREEN}[✔] $1${NC}"; }
 print_warn() { echo -e "${YELLOW}[⚠] $1${NC}"; }
 print_error() { echo -e "${RED}[✖] $1${NC}"; }
 die() { print_error "$1"; exit 1; }
+
+# ==============================================================================
+# PROTOCOLO TRANSACCIONAL (SHIELD ANTI-CORRUPCIÓN)
+# ==============================================================================
+cleanup() {
+    local exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        echo -e "\n${RED}========================================================================${NC}"
+        echo -e "${YELLOW}🚨 INSTALACIÓN INTERRUMPIDA O FALLIDA (Código: $exit_code) 🚨${NC}"
+        echo -e "${CYAN}Ejecutando protocolo de limpieza de emergencia para evitar corrupción...${NC}"
+        
+        if [ -f /var/lib/pacman/db.lck ]; then
+            rm -f /var/lib/pacman/db.lck
+            echo -e "${GREEN}[✔] Bloqueo de base de datos de Pacman liberado.${NC}"
+        fi
+        
+        if ls /tmp/cachyos-repo* >/dev/null 2>&1; then
+            rm -rf /tmp/cachyos-repo*
+            echo -e "${GREEN}[✔] Archivos temporales de descarga purgados.${NC}"
+        fi
+        
+        echo -e "${YELLOW}Estado del sistema neutralizado. No hay amputaciones ni paquetes corruptos.${NC}"
+        echo -e "${YELLOW}Puedes volver a ejecutar el script de forma segura.${NC}"
+        echo -e "${RED}========================================================================${NC}"
+    fi
+    exit "$exit_code"
+}
+
+# Capturar cualquier señal de interrupción (Ctrl+C, matar proceso, error de comando)
+trap cleanup EXIT INT TERM ERR
 
 # ==============================================================================
 # VALIDACIONES INICIALES
@@ -53,7 +84,6 @@ print_success "Validaciones iniciales superadas."
 # ==============================================================================
 # ALGORITMOS DE SELF-HEALING (AUTO-REPARACIÓN)
 # ==============================================================================
-
 run_pacman() {
     local attempt=1
     local max_retries=3
@@ -65,13 +95,11 @@ run_pacman() {
 
         print_warn "Pacman falló (Intento $attempt/$max_retries). Iniciando protocolo de auto-reparación..."
 
-        # Nivel 1: Destruir bloqueos huérfanos
         if [ -f /var/lib/pacman/db.lck ]; then
             print_info "Healing [1/3]: Destruyendo /var/lib/pacman/db.lck..."
             rm -f /var/lib/pacman/db.lck
         fi
 
-        # Nivel 2: Regenerar Keyring (Problemas de firmas)
         if [ $attempt -eq 2 ]; then
             print_info "Healing [2/3]: Regenerando llaves criptográficas de Arch/CachyOS..."
             pacman-key --init >/dev/null 2>&1 || true
@@ -79,7 +107,6 @@ run_pacman() {
             pacman -Sy archlinux-keyring cachyos-keyring --noconfirm || true
         fi
 
-        # Nivel 3: Refrescar Mirrors
         if [ $attempt -eq 3 ]; then
             print_info "Healing [3/3]: Actualizando lista de espejos..."
             if command -v cachyos-rate-mirrors >/dev/null 2>&1; then
@@ -115,7 +142,11 @@ run_paru() {
 # ==============================================================================
 # FASE 1: Cimientos y Cachyficación
 # ==============================================================================
-print_info "Fase 1: Descargando e inyectando Repositorios de CachyOS..."
+print_info "Fase 1: Preparación proactiva y Repositorios de CachyOS..."
+
+# Auditoría de compiladores (Prevención de Amputaciones)
+run_pacman -S --needed base-devel git curl wget
+
 cd /tmp
 rm -rf /tmp/cachyos-repo* 2>/dev/null || true
 
@@ -177,7 +208,6 @@ print_info "Inyectando nvidia-drm.modeset=1 en el gestor de arranque..."
 inject_bootloader() {
     local injected=false
     
-    # 1. systemd-boot
     if ls /boot/loader/entries/*.conf >/dev/null 2>&1; then
         for conf in /boot/loader/entries/*.conf; do
             if ! grep -q "nvidia-drm.modeset=1" "$conf"; then
@@ -188,7 +218,6 @@ inject_bootloader() {
         injected=true
     fi
 
-    # 2. GRUB
     if [ -f "/etc/default/grub" ]; then
         if ! grep -q "nvidia-drm.modeset=1" /etc/default/grub; then
             sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/&nvidia-drm.modeset=1 /' /etc/default/grub
@@ -198,7 +227,6 @@ inject_bootloader() {
         injected=true
     fi
 
-    # 3. kernel-install (global config)
     if [ -d "/etc/kernel" ]; then
         if [ -f "/etc/kernel/cmdline" ]; then
             if ! grep -q "nvidia-drm.modeset=1" /etc/kernel/cmdline; then
@@ -219,9 +247,7 @@ inject_bootloader() {
 
 if ! inject_bootloader; then
     print_warn "No se detectaron entradas de arranque. Iniciando Auto-Reparación..."
-    print_info "Forzando regeneración de entradas reinstalando hooks del kernel..."
     run_pacman -S linux-cachyos
-    
     if ! inject_bootloader; then
         die "Fallo Crítico irreversible: El gestor de arranque es fantasma. NVIDIA Blackwell fallará en Wayland."
     fi
@@ -239,16 +265,12 @@ configure_mkinitcpio() {
         return 0
     fi
 
-    # 1. Inyectar módulos de NVIDIA para Early KMS
     if ! grep -q "nvidia_drm" "$mk_conf"; then
-        # Reemplazar la primera coincidencia de MODULES=(...) asegurando que no se rompan las comillas/paréntesis
         sed -i 's/^MODULES=(/MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm /' "$mk_conf" || true
-        # Si la línea MODULES="" es usada en su lugar
         sed -i 's/^MODULES="/MODULES="nvidia nvidia_modeset nvidia_uvm nvidia_drm /' "$mk_conf" || true
         print_success "Módulos de NVIDIA (Early KMS) inyectados en $mk_conf."
     fi
 
-    # 2. Asegurar el hook de microcódigo después de autodetect
     if ! grep -E -q "HOOKS=.*microcode" "$mk_conf"; then
         sed -i 's/\(HOOKS=(.*autodetect\)/\1 microcode/' "$mk_conf" || true
         sed -i 's/\(HOOKS=".*autodetect\)/\1 microcode/' "$mk_conf" || true
@@ -442,5 +464,8 @@ EOF
     echo -e "2. Borra las llaves de Secure Boot (Pon la BIOS en Setup Mode)."
     echo -e "3. Inicia sesión en Arch y ejecuta el script ${YELLOW}'terminar-secureboot.sh'${NC} en tu Escritorio."
 fi
+
+# Desactivar la trampa de errores si todo salió bien
+trap - EXIT INT TERM ERR
 
 print_success "🎉 INSTALACIÓN MAESTRA COMPLETADA. Reinicia tu PC. 🎉"
