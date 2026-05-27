@@ -171,6 +171,38 @@ print_info "Sincronizando base de datos global de pacman (Self-Healing activo)..
 run_pacman -Syu
 
 # ==============================================================================
+# FASE 1.5: Arquitectura Criptográfica Temprana (Secure Boot)
+# ==============================================================================
+print_info "Fase 1.5: Configurando infraestructura de Secure Boot..."
+
+echo -e "\n${CYAN}========================================================================${NC}"
+echo -e "${YELLOW}🚨 CONFIGURACIÓN DE SECURE BOOT (INTERACTIVA) 🚨${NC}"
+echo -e "${CYAN}========================================================================${NC}"
+echo -e "Para empadronar las llaves en la placa base, la BIOS DEBE estar en 'Setup Mode'."
+echo -e "Si activas esto, los drivers de NVIDIA se firmarán automáticamente al compilarse."
+echo -e ""
+read -p "¿Tu BIOS está configurada en Setup Mode AHORA MISMO? (y/n): " setup_mode_ans
+
+DO_SECURE_BOOT=false
+if [[ "$setup_mode_ans" =~ ^[Yy]$ ]]; then
+    DO_SECURE_BOOT=true
+    run_pacman -S --needed sbctl
+    
+    print_info "Generando llaves maestras de Secure Boot..."
+    sbctl create-keys || die "Fallo Crítico: sbctl no pudo generar llaves."
+    
+    print_info "Configurando enlace de firmas automático para DKMS (NVIDIA)..."
+    mkdir -p /etc/dkms/framework.conf.d/
+    cat > /etc/dkms/framework.conf.d/sbctl-signing.conf <<EOF
+mok_signing_key="/var/lib/sbctl/keys/db/db.key"
+mok_certificate="/var/lib/sbctl/keys/db/db.pem"
+EOF
+    print_success "Infraestructura criptográfica inyectada. NVIDIA se auto-firmará."
+else
+    print_warn "Generación de llaves omitida. Se dejará un script en tu escritorio para hacerlo después."
+fi
+
+# ==============================================================================
 # FASE 2: Núcleo Duro y Hardware Base (Intel Arrow Lake)
 # ==============================================================================
 print_info "Fase 2: Instalando Kernel, Microcódigo y Soporte Completo Intel Core Ultra..."
@@ -398,61 +430,52 @@ inject_routines "/home/$REAL_USER/.zshrc"
 print_success "Rutinas inyectadas."
 
 # ==============================================================================
-# FASE 6: Secure Boot Automation
+# FASE 6: Empadronamiento Final (Secure Boot)
 # ==============================================================================
-print_info "Fase 6: Despliegue de Secure Boot (Blindaje Automático)"
-run_pacman -S --needed sbctl
+print_info "Fase 6: Empadronamiento y Sellado Final..."
 
-print_info "Configurando enlace de firmas entre sbctl y DKMS (NVIDIA)..."
-mkdir -p /etc/dkms/framework.conf.d/
-cat > /etc/dkms/framework.conf.d/sbctl-signing.conf <<EOF
-mok_signing_key="/var/lib/sbctl/keys/db/db.key"
-mok_certificate="/var/lib/sbctl/keys/db/db.pem"
-EOF
+if [ "$DO_SECURE_BOOT" = true ]; then
+    KERNEL_EFI=$(find /boot -name "vmlinuz-linux-cachyos" | head -n 1)
+    if [ -z "$KERNEL_EFI" ]; then
+        die "Fallo Crítico: Kernel vmlinuz-linux-cachyos no encontrado en /boot. Abortando firma."
+    fi
 
-KERNEL_EFI=$(find /boot -name "vmlinuz-linux-cachyos" | head -n 1)
-if [ -z "$KERNEL_EFI" ]; then
-    die "Fallo Crítico: Kernel vmlinuz-linux-cachyos no encontrado en /boot. Abortando firma."
-fi
+    SYSTEMD_EFI=$(find /boot/EFI -name "systemd-bootx64.efi" 2>/dev/null | head -n 1 || echo "")
+    BOOT_EFI=$(find /boot/EFI -name "BOOTX64.EFI" 2>/dev/null | head -n 1 || echo "")
 
-SYSTEMD_EFI=$(find /boot/EFI -name "systemd-bootx64.efi" 2>/dev/null | head -n 1 || echo "")
-BOOT_EFI=$(find /boot/EFI -name "BOOTX64.EFI" 2>/dev/null | head -n 1 || echo "")
-
-echo -e "\n${CYAN}========================================================================${NC}"
-echo -e "${YELLOW}🚨 FASE FINAL: MODO INTERACTIVO (SECURE BOOT) 🚨${NC}"
-echo -e "${CYAN}========================================================================${NC}"
-echo -e "El sistema necesita firmar los binarios EFI con tus llaves maestras."
-echo -e "Para empadronar las llaves en la placa base, la BIOS DEBE estar en 'Setup Mode'."
-echo -e ""
-read -p "¿Tu BIOS está configurada en Setup Mode AHORA MISMO? (y/n): " setup_mode_ans
-
-if [[ "$setup_mode_ans" =~ ^[Yy]$ ]]; then
-    print_info "Generando y empadronando llaves maestras..."
-    sbctl create-keys || die "Fallo Crítico: sbctl no pudo generar llaves."
-    
+    print_info "Firmando binarios de arranque..."
     sbctl sign -s "$KERNEL_EFI" || die "Fallo Crítico: Fallo al firmar el Kernel."
     [ -n "$SYSTEMD_EFI" ] && { sbctl sign -s "$SYSTEMD_EFI" || die "Fallo al firmar systemd-boot."; }
     [ -n "$BOOT_EFI" ] && { sbctl sign -s "$BOOT_EFI" || die "Fallo al firmar BOOTX64.EFI."; }
     
-    sbctl enroll-keys --microsoft || die "Fallo Crítico: La placa base rechazó las llaves. Revise Setup Mode."
+    print_info "Empadronando llaves en la placa base (ASUS)..."
+    sbctl enroll-keys --microsoft || die "Fallo Crítico: La placa base rechazó las llaves. ¿Seguro que estabas en Setup Mode?"
     
-    print_info "Recompilando NVIDIA con la nueva firma..."
-    dkms autoinstall || die "Fallo Crítico: DKMS falló al compilar NVIDIA."
-    
-    print_success "¡Secure Boot configurado y blindado exitosamente!"
+    print_success "¡Secure Boot configurado y empadronado exitosamente!"
 else
-    print_warn "Fase de Secure Boot pausada."
-    
     mkdir -p "/home/$REAL_USER/Desktop"
     cat > "/home/$REAL_USER/Desktop/terminar-secureboot.sh" <<EOF
 #!/bin/bash
 set -euo pipefail
 if [ "\$EUID" -ne 0 ]; then echo "Ejecuta con sudo."; exit 1; fi
 echo "Finalizando configuración de Secure Boot..."
+pacman -S --needed sbctl --noconfirm
 sbctl create-keys || { echo "Fallo al crear llaves."; exit 1; }
-sbctl sign -s "$KERNEL_EFI" || { echo "Fallo al firmar Kernel."; exit 1; }
-[ -n "$SYSTEMD_EFI" ] && sbctl sign -s "$SYSTEMD_EFI"
-[ -n "$BOOT_EFI" ] && sbctl sign -s "$BOOT_EFI"
+
+mkdir -p /etc/dkms/framework.conf.d/
+cat > /etc/dkms/framework.conf.d/sbctl-signing.conf <<'INNEREOF'
+mok_signing_key="/var/lib/sbctl/keys/db/db.key"
+mok_certificate="/var/lib/sbctl/keys/db/db.pem"
+INNEREOF
+
+KERNEL_EFI=\$(find /boot -name "vmlinuz-linux-cachyos" | head -n 1)
+SYSTEMD_EFI=\$(find /boot/EFI -name "systemd-bootx64.efi" 2>/dev/null | head -n 1 || echo "")
+BOOT_EFI=\$(find /boot/EFI -name "BOOTX64.EFI" 2>/dev/null | head -n 1 || echo "")
+
+sbctl sign -s "\$KERNEL_EFI" || { echo "Fallo al firmar Kernel."; exit 1; }
+[ -n "\$SYSTEMD_EFI" ] && sbctl sign -s "\$SYSTEMD_EFI"
+[ -n "\$BOOT_EFI" ] && sbctl sign -s "\$BOOT_EFI"
+
 sbctl enroll-keys --microsoft || { echo "Fallo empadronamiento. Reinicie BIOS a Setup Mode."; exit 1; }
 dkms autoinstall || { echo "Fallo DKMS."; exit 1; }
 echo "¡Secure Boot configurado y blindado!"
