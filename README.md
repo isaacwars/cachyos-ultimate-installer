@@ -9,7 +9,7 @@ This script is architected *exclusively* for a highly specific hardware stack. R
 ### Mandatory Hardware Stack:
 - **CPU:** Intel Core Ultra (Arrow Lake / Meteor Lake) *Required for `intel-ucode`, `thermald` tuning, and NPU driver compilation.*
 - **GPU:** NVIDIA Blackwell (RTX 50-series) *Required for `nvidia-open-dkms` injection and Wayland Early KMS.*
-- **Motherboard:** UEFI-based motherboard (ASUS Prime Z890P or similar) *Required for Secure Boot `sbctl` injection.*
+- **Motherboard:** Any modern UEFI-based Motherboard *Required for Secure Boot `sbctl` injection.*
 
 ### Mandatory Software Prerequisites:
 - **OS:** A fresh, clean Arch Linux installation.
