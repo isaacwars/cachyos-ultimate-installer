@@ -441,11 +441,13 @@ if [ "$DO_SECURE_BOOT" = true ]; then
     fi
 
     SYSTEMD_EFI=$(find /boot/EFI -name "systemd-bootx64.efi" 2>/dev/null | head -n 1 || echo "")
+    GRUB_EFI=$(find /boot/EFI -iname "grubx64.efi" 2>/dev/null | head -n 1 || echo "")
     BOOT_EFI=$(find /boot/EFI -name "BOOTX64.EFI" 2>/dev/null | head -n 1 || echo "")
 
     print_info "Firmando binarios de arranque..."
     sbctl sign -s "$KERNEL_EFI" || die "Fallo Crítico: Fallo al firmar el Kernel."
     [ -n "$SYSTEMD_EFI" ] && { sbctl sign -s "$SYSTEMD_EFI" || die "Fallo al firmar systemd-boot."; }
+    [ -n "$GRUB_EFI" ] && { sbctl sign -s "$GRUB_EFI" || die "Fallo al firmar GRUB."; }
     [ -n "$BOOT_EFI" ] && { sbctl sign -s "$BOOT_EFI" || die "Fallo al firmar BOOTX64.EFI."; }
     
     print_info "Empadronando llaves en la placa base (ASUS)..."
@@ -470,14 +472,21 @@ INNEREOF
 
 KERNEL_EFI=\$(find /boot -name "vmlinuz-linux-cachyos" | head -n 1)
 SYSTEMD_EFI=\$(find /boot/EFI -name "systemd-bootx64.efi" 2>/dev/null | head -n 1 || echo "")
+GRUB_EFI=\$(find /boot/EFI -iname "grubx64.efi" 2>/dev/null | head -n 1 || echo "")
 BOOT_EFI=\$(find /boot/EFI -name "BOOTX64.EFI" 2>/dev/null | head -n 1 || echo "")
 
 sbctl sign -s "\$KERNEL_EFI" || { echo "Fallo al firmar Kernel."; exit 1; }
 [ -n "\$SYSTEMD_EFI" ] && sbctl sign -s "\$SYSTEMD_EFI"
+[ -n "\$GRUB_EFI" ] && sbctl sign -s "\$GRUB_EFI"
 [ -n "\$BOOT_EFI" ] && sbctl sign -s "\$BOOT_EFI"
 
 sbctl enroll-keys --microsoft || { echo "Fallo empadronamiento. Reinicie BIOS a Setup Mode."; exit 1; }
-dkms autoinstall || { echo "Fallo DKMS."; exit 1; }
+
+echo "Forzando recompilación de NVIDIA para inyectar las nuevas firmas..."
+dkms remove -m nvidia --all >/dev/null 2>&1 || true
+dkms remove -m nvidia-open --all >/dev/null 2>&1 || true
+dkms autoinstall || { echo "Fallo DKMS al recompilar."; exit 1; }
+
 echo "¡Secure Boot configurado y blindado!"
 EOF
     chmod +x "/home/$REAL_USER/Desktop/terminar-secureboot.sh" || true
