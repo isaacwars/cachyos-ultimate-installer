@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # CACHYOS ULTIMATE INSTALLER (ENTERPRISE TRANSACTIONAL EDITION)
-# ArchLinux Post-Install Script
+# Arch Linux Post-Install Script
 # Architecture: Intel Core Ultra (Arrow Lake) + NVIDIA Blackwell (RTX 50-series)
 # Features: Traps (Anti-Corruption), Self-Healing, Early KMS, Secure Boot
 # ==============================================================================
@@ -24,68 +24,68 @@ print_error() { echo -e "${RED}[✖] $1${NC}"; }
 die() { print_error "$1"; exit 1; }
 
 # ==============================================================================
-# PROTOCOLO TRANSACCIONAL (SHIELD ANTI-CORRUPCIÓN)
+# TRANSACTIONAL PROTOCOL (ANTI-CORRUPTION SHIELD)
 # ==============================================================================
 cleanup() {
     local exit_code=$?
     if [ $exit_code -ne 0 ]; then
         echo -e "\n${RED}========================================================================${NC}"
-        echo -e "${YELLOW}🚨 INSTALACIÓN INTERRUMPIDA O FALLIDA (Código: $exit_code) 🚨${NC}"
-        echo -e "${CYAN}Ejecutando protocolo de limpieza de emergencia para evitar corrupción...${NC}"
+        echo -e "${YELLOW}INSTALLATION INTERRUPTED OR FAILED (Exit code: $exit_code)${NC}"
+        echo -e "${CYAN}Running emergency cleanup protocol to prevent corruption...${NC}"
         
         if [ -f /var/lib/pacman/db.lck ]; then
             rm -f /var/lib/pacman/db.lck
-            echo -e "${GREEN}[✔] Bloqueo de base de datos de Pacman liberado.${NC}"
+            echo -e "${GREEN}[✔] Pacman database lock released.${NC}"
         fi
         
         if ls /tmp/cachyos-repo* >/dev/null 2>&1; then
             rm -rf /tmp/cachyos-repo*
-            echo -e "${GREEN}[✔] Archivos temporales de descarga purgados.${NC}"
+            echo -e "${GREEN}[✔] Temporary download files purged.${NC}"
         fi
         
-        echo -e "${YELLOW}Estado del sistema neutralizado. No hay amputaciones ni paquetes corruptos.${NC}"
-        echo -e "${YELLOW}Puedes volver a ejecutar el script de forma segura.${NC}"
+        echo -e "${YELLOW}System state neutralized. No orphaned or corrupted packages.${NC}"
+        echo -e "${YELLOW}You can safely re-run the script.${NC}"
         echo -e "${RED}========================================================================${NC}"
     fi
     exit "$exit_code"
 }
 
-# Capturar cualquier señal de interrupción (Ctrl+C, matar proceso, error de comando)
+# Capture any interruption signal (Ctrl+C, process kill, command error)
 trap cleanup EXIT INT TERM ERR
 
 # ==============================================================================
-# VALIDACIONES INICIALES
+# INITIAL VALIDATIONS
 # ==============================================================================
 if [ "$EUID" -ne 0 ]; then
-    die "Este script debe ejecutarse como root (con sudo)."
+    die "This script must be run as root (with sudo)."
 fi
 
 REAL_USER=${SUDO_USER:-$(whoami)}
 if [ "$REAL_USER" = "root" ] || [ -z "$REAL_USER" ]; then
-    die "Fallo Crítico: Ejecuta este script como usuario normal usando 'sudo'. paru lo requiere."
+    die "Critical Failure: Run this script as a normal user using 'sudo'. paru requires it."
 fi
 if [[ ! "$REAL_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]; then
-    die "Fallo Crítico: Nombre de usuario inválido detectado (posible vector de inyección)."
+    die "Critical Failure: Invalid username detected (possible injection vector)."
 fi
 
 if [ ! -d "/sys/firmware/efi" ]; then
-    die "Fallo Crítico: Este script requiere un sistema instalado en modo UEFI."
+    die "Critical Failure: This script requires a UEFI-installed system."
 fi
 
-# Auto-reparación inicial de red (DNS fallback)
+# Auto-repair network at startup (DNS fallback)
 if ! ping -c 1 -W 5 archlinux.org >/dev/null 2>&1; then
-    print_warn "Problemas de resolución DNS detectados. Aplicando auto-reparación (Fallback a Cloudflare 1.1.1.1)..."
+    print_warn "DNS resolution issues detected. Applying auto-repair (Fallback to Cloudflare 1.1.1.1)..."
     echo "nameserver 1.1.1.1" > /etc/resolv.conf
     if ! ping -c 1 -W 5 archlinux.org >/dev/null 2>&1; then
-        die "Fallo Crítico: Sin conexión a internet física."
+        die "Critical Failure: No physical internet connection."
     fi
-    print_success "DNS reparado temporalmente."
+    print_success "DNS temporarily repaired."
 fi
 
-print_success "Validaciones iniciales superadas."
+print_success "Initial validations passed."
 
 # ==============================================================================
-# ALGORITMOS DE SELF-HEALING (AUTO-REPARACIÓN)
+# SELF-HEALING ALGORITHMS (AUTO-REPAIR)
 # ==============================================================================
 run_pacman() {
     local attempt=1
@@ -96,22 +96,22 @@ run_pacman() {
             return 0
         fi
 
-        print_warn "Pacman falló (Intento $attempt/$max_retries). Iniciando protocolo de auto-reparación..."
+        print_warn "Pacman failed (Attempt $attempt/$max_retries). Starting auto-repair protocol..."
 
         if [ -f /var/lib/pacman/db.lck ]; then
-            print_info "Healing [1/3]: Destruyendo /var/lib/pacman/db.lck..."
+            print_info "Healing [1/3]: Destroying /var/lib/pacman/db.lck..."
             rm -f /var/lib/pacman/db.lck
         fi
 
         if [ $attempt -eq 2 ]; then
-            print_info "Healing [2/3]: Regenerando llaves criptográficas de Arch/CachyOS..."
+            print_info "Healing [2/3]: Regenerating Arch/CachyOS cryptographic keys..."
             pacman-key --init >/dev/null 2>&1 || true
             pacman-key --populate archlinux cachyos >/dev/null 2>&1 || pacman-key --populate archlinux >/dev/null 2>&1 || true
             pacman -Sy archlinux-keyring cachyos-keyring --noconfirm || true
         fi
 
         if [ $attempt -eq 3 ]; then
-            print_info "Healing [3/3]: Actualizando lista de espejos..."
+            print_info "Healing [3/3]: Updating mirror list..."
             if command -v cachyos-rate-mirrors >/dev/null 2>&1; then
                 cachyos-rate-mirrors >/dev/null 2>&1 || true
             elif command -v reflector >/dev/null 2>&1; then
@@ -124,7 +124,7 @@ run_pacman() {
         sleep 2
     done
 
-    die "Fallo Crítico: Pacman no pudo recuperarse tras 3 intentos de auto-reparación. Comando: pacman $*"
+    die "Critical Failure: Pacman could not recover after 3 auto-repair attempts. Command: pacman $*"
 }
 
 run_paru() {
@@ -132,62 +132,62 @@ run_paru() {
         return 0
     fi
     
-    print_warn "AUR/Paru falló. Iniciando auto-reparación de dependencias y caché..."
+    print_warn "AUR/Paru failed. Starting dependency & cache auto-repair..."
     run_pacman -S --needed base-devel git
     sudo -u "$REAL_USER" bash -c "paru -Sc --noconfirm" || true
     
-    print_info "Reintentando compilación..."
+    print_info "Retrying build..."
     if ! sudo -u "$REAL_USER" paru "$@" --noconfirm; then
-        die "Fallo Crítico: AUR falló irreversiblemente tras auto-reparación. Comando: paru $*"
+        die "Critical Failure: AUR irreversibly failed after auto-repair. Command: paru $*"
     fi
 }
 
 # ==============================================================================
-# FASE 1: Cimientos y Cachyficación
+# PHASE 1: Foundations and Cachyfication
 # ==============================================================================
-print_info "Fase 1: Preparación proactiva y Repositorios de CachyOS..."
+print_info "Phase 1: Proactive preparation and CachyOS Repositories..."
 
-# Auditoría de compiladores (Prevención de Amputaciones)
+# Compiler audit (Amputation Prevention)
 run_pacman -S --needed base-devel git curl wget
 
 cd /tmp
 rm -rf /tmp/cachyos-repo* 2>/dev/null || true
 
-# Auto-reparación de descarga de repositorio
+# Repository download auto-repair
 if ! curl --connect-timeout 10 --max-time 120 -sOf https://mirror.cachyos.org/cachyos-repo.tar.xz; then
-    print_warn "Fallo de descarga principal. Reintentando desde GitHub RAW (Respaldo)..."
+    print_warn "Primary download failed. Retrying from GitHub RAW (Fallback)..."
     if ! curl --connect-timeout 10 --max-time 120 -sOfL https://raw.githubusercontent.com/CachyOS/CachyOS-Repo/master/cachyos-repo.tar.xz; then
-        die "Fallo Crítico: No se pudo descargar el repositorio desde ningún origen."
+        die "Critical Failure: Could not download repository from any source."
     fi
 fi
 
 if ! tar xvf cachyos-repo.tar.xz >/dev/null 2>&1; then
-    die "Fallo Crítico: Archivo cachyos-repo.tar.xz corrupto."
+    die "Critical Failure: Corrupted cachyos-repo.tar.xz archive."
 fi
 
 cd cachyos-repo
 chmod +x ./cachyos-repo.sh || true
-./cachyos-repo.sh || die "Fallo Crítico: El script oficial de CachyOS falló."
-print_success "Repositorios inyectados."
+./cachyos-repo.sh || die "Critical Failure: The official CachyOS script failed."
+print_success "Repositories injected."
 
-print_info "Sincronizando base de datos global de pacman (Self-Healing activo)..."
+print_info "Synchronizing global pacman database (Self-Healing active)..."
 run_pacman -Syu
 
 # ==============================================================================
-# FASE 1.5: Arquitectura Criptográfica Temprana (Secure Boot)
+# PHASE 1.5: Early Cryptographic Architecture (Secure Boot)
 # ==============================================================================
-print_info "Fase 1.5: Configurando infraestructura de Secure Boot..."
+print_info "Phase 1.5: Setting up Secure Boot infrastructure..."
 
 echo -e "\n${CYAN}========================================================================${NC}"
-echo -e "${YELLOW}🚨 CONFIGURACIÓN DE SECURE BOOT (INTERACTIVA) 🚨${NC}"
+echo -e "${YELLOW}SECURE BOOT CONFIGURATION (INTERACTIVE)${NC}"
 echo -e "${CYAN}========================================================================${NC}"
-echo -e "Para empadronar las llaves en la placa base, la BIOS DEBE estar en 'Setup Mode'."
-echo -e "Si activas esto, los drivers de NVIDIA se firmarán automáticamente al compilarse."
+echo -e "To enroll keys on the motherboard, your BIOS MUST be in 'Setup Mode'."
+echo -e "If you enable this, NVIDIA drivers will be auto-signed upon compilation."
 echo -e ""
 if [ -t 0 ]; then
-    read -p "¿Tu BIOS está configurada en Setup Mode AHORA MISMO? (y/n): " setup_mode_ans
+    read -p "Is your BIOS currently in Setup Mode? (y/n): " setup_mode_ans
 else
-    print_warn "Entorno no-interactivo (headless) detectado. Secure Boot se pospone (script en escritorio)."
+    print_warn "Non-interactive (headless) environment detected. Secure Boot postponed (desktop script)."
     setup_mode_ans="n"
 fi
 
@@ -196,33 +196,33 @@ if [[ "$setup_mode_ans" =~ ^[Yy]$ ]]; then
     DO_SECURE_BOOT=true
     run_pacman -S --needed sbctl
     
-    print_info "Generando llaves maestras de Secure Boot..."
-    sbctl create-keys || die "Fallo Crítico: sbctl no pudo generar llaves."
+    print_info "Generating Secure Boot master keys..."
+    sbctl create-keys || die "Critical Failure: sbctl could not generate keys."
     
-    print_info "Configurando enlace de firmas automático para DKMS (NVIDIA)..."
+    print_info "Setting up auto-signing link for DKMS (NVIDIA)..."
     mkdir -p /etc/dkms/framework.conf.d/
     cat > /etc/dkms/framework.conf.d/sbctl-signing.conf <<EOF
 mok_signing_key="/var/lib/sbctl/keys/db/db.key"
 mok_certificate="/var/lib/sbctl/keys/db/db.pem"
 EOF
-    print_success "Infraestructura criptográfica inyectada. NVIDIA se auto-firmará."
+    print_success "Cryptographic infrastructure injected. NVIDIA will auto-sign."
 else
-    print_warn "Generación de llaves omitida. Se dejará un script en tu escritorio para hacerlo después."
+    print_warn "Key generation skipped. A desktop script will be left for later setup."
 fi
 
 # ==============================================================================
-# FASE 2: Núcleo Duro y Hardware Base (Intel Arrow Lake)
+# PHASE 2: Hard Core and Base Hardware (Intel Arrow Lake)
 # ==============================================================================
-print_info "Fase 2: Instalando Kernel, Microcódigo y Soporte Completo Intel Core Ultra..."
+print_info "Phase 2: Installing Kernel, Microcode and Full Intel Core Ultra Support..."
 run_pacman -S --needed \
     linux-cachyos linux-cachyos-headers cachyos-settings \
     intel-ucode thermald mesa vulkan-intel intel-media-driver level-zero-loader \
     scx-scheds
 
-print_info "Habilitando servicio térmico (thermald)..."
-systemctl enable thermald || die "Fallo Crítico: No se pudo habilitar thermald."
+print_info "Enabling thermal service (thermald)..."
+systemctl enable thermald || die "Critical Failure: Could not enable thermald."
 
-print_info "Configurando Sched-Ext (SCX_LAVD)..."
+print_info "Configuring Sched-Ext (SCX_LAVD)..."
 mkdir -p /etc/default
 if grep -q "^SCX_SCHEDULER=" /etc/default/scx 2>/dev/null; then
     sed -i 's/^SCX_SCHEDULER=.*/SCX_SCHEDULER=scx_lavd/' /etc/default/scx
@@ -231,19 +231,19 @@ else
 fi
 
 if [ ! -x "/usr/bin/scx_lavd" ]; then
-    die "Fallo Crítico: El binario scx_lavd no existe. Pacman omitió su instalación."
+    die "Critical Failure: scx_lavd binary does not exist. Pacman skipped its installation."
 fi
-systemctl enable scx.service || die "Fallo Crítico: No se pudo habilitar scx.service."
-print_success "Hardware base de Intel configurado y blindado."
+systemctl enable scx.service || die "Critical Failure: Could not enable scx.service."
+print_success "Intel base hardware configured and hardened."
 
 # ==============================================================================
-# FASE 3: NVIDIA Blackwell y Gestor de Arranque
+# PHASE 3: NVIDIA Blackwell and Bootloader
 # ==============================================================================
-print_info "Fase 3: Instalando drivers NVIDIA Open DKMS (Blackwell)..."
+print_info "Phase 3: Installing NVIDIA Open DKMS drivers (Blackwell)..."
 run_pacman -S --needed \
     nvidia-open-dkms nvidia-utils nvidia-settings lib32-nvidia-utils
 
-print_info "Inyectando nvidia-drm.modeset=1 en el gestor de arranque..."
+print_info "Injecting nvidia-drm.modeset=1 into the bootloader..."
 
 inject_bootloader() {
     local injected=false
@@ -254,7 +254,7 @@ inject_bootloader() {
                 sed -i 's/^options .*/& nvidia-drm.modeset=1/' "$conf"
             fi
         done
-        print_success "Parámetros inyectados en las entradas de systemd-boot."
+        print_success "Parameters injected into systemd-boot entries."
         injected=true
     fi
 
@@ -262,8 +262,8 @@ inject_bootloader() {
         if ! grep -q "nvidia-drm.modeset=1" /etc/default/grub; then
             cp /etc/default/grub /etc/default/grub.bak.$(date +%s) || true
             sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/&nvidia-drm.modeset=1 /' /etc/default/grub
-            grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 || die "Fallo Crítico al reconstruir GRUB."
-            print_success "Parámetros inyectados en GRUB."
+            grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 || die "Critical Failure: Could not rebuild GRUB."
+            print_success "Parameters injected into GRUB."
         fi
         injected=true
     fi
@@ -276,7 +276,7 @@ inject_bootloader() {
         else
             echo "nvidia-drm.modeset=1" > /etc/kernel/cmdline
         fi
-        print_success "Parámetros añadidos a /etc/kernel/cmdline global."
+        print_success "Parameters added to global /etc/kernel/cmdline."
         injected=true
     fi
 
@@ -287,22 +287,22 @@ inject_bootloader() {
 }
 
 if ! inject_bootloader; then
-    print_warn "No se detectaron entradas de arranque. Iniciando Auto-Reparación..."
+    print_warn "No boot entries detected. Starting Auto-Repair..."
     run_pacman -S linux-cachyos
     if ! inject_bootloader; then
-        die "Fallo Crítico irreversible: El gestor de arranque es fantasma. NVIDIA Blackwell fallará en Wayland."
+        die "Irreversible Critical Failure: Ghost bootloader. NVIDIA Blackwell will fail on Wayland."
     fi
 fi
 
 # ==============================================================================
-# FASE 3.5: Early Boot & Initramfs Synchronization
+# PHASE 3.5: Early Boot & Initramfs Synchronization
 # ==============================================================================
-print_info "Fase 3.5: Configurando Early KMS y Microcódigo (Arranque de Bajo Nivel)..."
+print_info "Phase 3.5: Setting up Early KMS and Microcode (Low-Level Boot)..."
 
 configure_mkinitcpio() {
     local mk_conf="/etc/mkinitcpio.conf"
     if [ ! -f "$mk_conf" ]; then
-        print_warn "Archivo $mk_conf no encontrado. Saltando configuración de Early KMS."
+        print_warn "File $mk_conf not found. Skipping Early KMS configuration."
         return 0
     fi
 
@@ -310,43 +310,43 @@ configure_mkinitcpio() {
         cp "$mk_conf" "${mk_conf}.bak.$(date +%s)" || true
         sed -i 's/^MODULES=(/MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm /' "$mk_conf" || true
         sed -i 's/^MODULES="/MODULES="nvidia nvidia_modeset nvidia_uvm nvidia_drm /' "$mk_conf" || true
-        print_success "Módulos de NVIDIA (Early KMS) inyectados en $mk_conf."
+        print_success "NVIDIA modules (Early KMS) injected into $mk_conf."
     fi
 
     if ! grep -E -q "HOOKS=.*microcode" "$mk_conf"; then
         cp "$mk_conf" "${mk_conf}.bak.$(date +%s)" || true
         sed -i 's/\(HOOKS=(.*autodetect\)/\1 microcode/' "$mk_conf" || true
         sed -i 's/\(HOOKS=".*autodetect\)/\1 microcode/' "$mk_conf" || true
-        print_success "Hook de microcódigo inyectado en $mk_conf."
+        print_success "Microcode hook injected into $mk_conf."
     fi
 
-    print_info "Sincronizando y reconstruyendo Ramdisk inicial..."
+    print_info "Synchronizing and rebuilding initial Ramdisk..."
     if ! mkinitcpio -P >/dev/null 2>&1; then
-        die "Fallo Crítico: mkinitcpio no pudo regenerar las imágenes de arranque. El sistema podría no iniciar."
+        die "Critical Failure: mkinitcpio could not regenerate boot images. System may not boot."
     fi
-    print_success "Initramfs reconstruido y sincronizado exitosamente."
+    print_success "Initramfs rebuilt and synchronized successfully."
 }
 
 configure_mkinitcpio
 
 # ==============================================================================
-# FASE 4: AUR y NPU de Intel
+# PHASE 4: AUR and Intel NPU
 # ==============================================================================
-print_info "Fase 4: Configurando AUR y Compilando Unidad Neuronal (NPU)..."
+print_info "Phase 4: Setting up AUR and compiling Neural Processing Unit (NPU)..."
 run_pacman -S --needed paru rebuild-detector fwupd
 
-print_info "Descargando e instalando firmware de la NPU desde AUR..."
+print_info "Downloading and installing NPU firmware from AUR..."
 run_paru -S --needed intel-npu-driver-bin
-print_success "NPU de Intel correctamente instalada."
+print_success "Intel NPU successfully installed."
 
 # ==============================================================================
-# FASE 5: Rutinas de Mantenimiento Personalizadas
+# PHASE 5: Custom Maintenance Routines
 # ==============================================================================
-print_info "Fase 5: Inyectando rutinas robustas update() y cleanpc()..."
+print_info "Phase 5: Injecting robust update() and cleanpc() routines..."
 
 ROUTINES_CODE='
 # ==========================================
-# RUTINAS DE MANTENIMIENTO CACHYOS
+# CACHYOS MAINTENANCE ROUTINES
 # ==========================================
 update() {
     local red="\033[0;31m"
@@ -354,9 +354,9 @@ update() {
     local yellow="\033[1;33m"
     local nc="\033[0m"
 
-    echo -e "${yellow}[>] Verificando conexión a internet...${nc}"
+    echo -e "${yellow}[>] Checking internet connection...${nc}"
     if ! ping -c 1 1.1.1.1 >/dev/null 2>&1; then
-        echo -e "${red}❌ No hay conexión a internet. Abortando update.${nc}"
+        echo -e "${red}[!] No internet connection. Aborting update.${nc}"
         return 1
     fi
 
@@ -386,7 +386,7 @@ update() {
             echo -e "\n${yellow}[>] Updating systemd-boot bootloader...${nc}"
             sudo bootctl update || return 1
             if command -v sbctl >/dev/null 2>&1; then
-                sudo sbctl sign-all >/dev/null 2>&1 || echo -e "${red}⚠ Fallo al re-firmar el gestor de arranque.${nc}"
+                sudo sbctl sign-all >/dev/null 2>&1 || echo -e "${red}[!] Failed to re-sign bootloader.${nc}"
             fi
         fi
     fi
@@ -395,7 +395,7 @@ update() {
         fwupdmgr refresh && fwupdmgr get-updates || true
     fi
 
-    echo -e "${green}✅ Update completed successfully!${nc}"
+    echo -e "${green}[OK] Update completed successfully!${nc}"
 }
 
 cleanpc() {
@@ -421,7 +421,7 @@ cleanpc() {
     sudo rm -rf /tmp/* >/dev/null 2>&1 || true
     sudo fstrim -av >/dev/null 2>&1 || true
 
-    echo -e "${green}✅ System cleaned!${nc}"
+    echo -e "${green}[OK] System cleaned!${nc}"
 }
 '
 
@@ -429,7 +429,7 @@ inject_routines() {
     local target="$1"
     if [ -d "$(dirname "$target")" ]; then
         touch "$target"
-        if ! grep -q "RUTINAS DE MANTENIMIENTO CACHYOS" "$target"; then
+        if ! grep -q "CACHYOS MAINTENANCE ROUTINES" "$target"; then
             echo "$ROUTINES_CODE" >> "$target"
         fi
     fi
@@ -440,42 +440,42 @@ inject_routines "/etc/skel/.zshrc"
 inject_routines "/home/$REAL_USER/.bashrc"
 inject_routines "/home/$REAL_USER/.zshrc"
 
-print_success "Rutinas inyectadas."
+print_success "Routines injected."
 
 # ==============================================================================
-# FASE 6: Empadronamiento Final (Secure Boot)
+# PHASE 6: Final Enrollment (Secure Boot)
 # ==============================================================================
-print_info "Fase 6: Empadronamiento y Sellado Final..."
+print_info "Phase 6: Final Enrollment and Sealing..."
 
 if [ "$DO_SECURE_BOOT" = true ]; then
     KERNEL_EFI=$(find /boot -maxdepth 3 -name "vmlinuz-linux-cachyos" | head -n 1)
     if [ -z "$KERNEL_EFI" ]; then
-        die "Fallo Crítico: Kernel vmlinuz-linux-cachyos no encontrado en /boot. Abortando firma."
+        die "Critical Failure: Kernel vmlinuz-linux-cachyos not found in /boot. Aborting signing."
     fi
 
     SYSTEMD_EFI=$(find /boot/EFI -maxdepth 3 -name "systemd-bootx64.efi" 2>/dev/null | head -n 1 || echo "")
     GRUB_EFI=$(find /boot/EFI -maxdepth 3 -iname "grubx64.efi" 2>/dev/null | head -n 1 || echo "")
     BOOT_EFI=$(find /boot/EFI -maxdepth 3 -name "BOOTX64.EFI" 2>/dev/null | head -n 1 || echo "")
 
-    print_info "Firmando binarios de arranque..."
-    sbctl sign -s "$KERNEL_EFI" || die "Fallo Crítico: Fallo al firmar el Kernel."
-    [ -n "$SYSTEMD_EFI" ] && { sbctl sign -s "$SYSTEMD_EFI" || die "Fallo al firmar systemd-boot."; }
-    [ -n "$GRUB_EFI" ] && { sbctl sign -s "$GRUB_EFI" || die "Fallo al firmar GRUB."; }
-    [ -n "$BOOT_EFI" ] && { sbctl sign -s "$BOOT_EFI" || die "Fallo al firmar BOOTX64.EFI."; }
+    print_info "Signing boot binaries..."
+    sbctl sign -s "$KERNEL_EFI" || die "Critical Failure: Failed to sign Kernel."
+    [ -n "$SYSTEMD_EFI" ] && { sbctl sign -s "$SYSTEMD_EFI" || die "Failed to sign systemd-boot."; }
+    [ -n "$GRUB_EFI" ] && { sbctl sign -s "$GRUB_EFI" || die "Failed to sign GRUB."; }
+    [ -n "$BOOT_EFI" ] && { sbctl sign -s "$BOOT_EFI" || die "Failed to sign BOOTX64.EFI."; }
     
-    print_info "Empadronando llaves en la placa base (ASUS)..."
-    sbctl enroll-keys --microsoft || die "Fallo Crítico: La placa base rechazó las llaves. ¿Seguro que estabas en Setup Mode?"
+    print_info "Enrolling keys on motherboard (ASUS)..."
+    sbctl enroll-keys --microsoft || die "Critical Failure: Motherboard rejected the keys. Are you sure you were in Setup Mode?"
     
-    print_success "¡Secure Boot configurado y empadronado exitosamente!"
+    print_success "Secure Boot successfully configured and enrolled!"
 else
     mkdir -p "/home/$REAL_USER/Desktop"
-    cat > "/home/$REAL_USER/Desktop/terminar-secureboot.sh" <<EOF
+    cat > "/home/$REAL_USER/Desktop/terminar-secureboot.sh" <<'HEREDOC'
 #!/bin/bash
 set -euo pipefail
-if [ "\$EUID" -ne 0 ]; then echo "Ejecuta con sudo."; exit 1; fi
-echo "Finalizando configuración de Secure Boot..."
+if [ "$EUID" -ne 0 ]; then echo "Run with sudo."; exit 1; fi
+echo "Finishing Secure Boot setup..."
 pacman -S --needed sbctl --noconfirm
-sbctl create-keys || { echo "Fallo al crear llaves."; exit 1; }
+sbctl create-keys || { echo "Failed to create keys."; exit 1; }
 
 mkdir -p /etc/dkms/framework.conf.d/
 cat > /etc/dkms/framework.conf.d/sbctl-signing.conf <<'INNEREOF'
@@ -483,34 +483,34 @@ mok_signing_key="/var/lib/sbctl/keys/db/db.key"
 mok_certificate="/var/lib/sbctl/keys/db/db.pem"
 INNEREOF
 
-KERNEL_EFI=\$(find /boot -maxdepth 3 -name "vmlinuz-linux-cachyos" | head -n 1)
-SYSTEMD_EFI=\$(find /boot/EFI -maxdepth 3 -name "systemd-bootx64.efi" 2>/dev/null | head -n 1 || echo "")
-GRUB_EFI=\$(find /boot/EFI -maxdepth 3 -iname "grubx64.efi" 2>/dev/null | head -n 1 || echo "")
-BOOT_EFI=\$(find /boot/EFI -maxdepth 3 -name "BOOTX64.EFI" 2>/dev/null | head -n 1 || echo "")
+KERNEL_EFI=$(find /boot -maxdepth 3 -name "vmlinuz-linux-cachyos" | head -n 1)
+SYSTEMD_EFI=$(find /boot/EFI -maxdepth 3 -name "systemd-bootx64.efi" 2>/dev/null | head -n 1 || echo "")
+GRUB_EFI=$(find /boot/EFI -maxdepth 3 -iname "grubx64.efi" 2>/dev/null | head -n 1 || echo "")
+BOOT_EFI=$(find /boot/EFI -maxdepth 3 -name "BOOTX64.EFI" 2>/dev/null | head -n 1 || echo "")
 
-sbctl sign -s "\$KERNEL_EFI" || { echo "Fallo al firmar Kernel."; exit 1; }
-[ -n "\$SYSTEMD_EFI" ] && sbctl sign -s "\$SYSTEMD_EFI"
-[ -n "\$GRUB_EFI" ] && sbctl sign -s "\$GRUB_EFI"
-[ -n "\$BOOT_EFI" ] && sbctl sign -s "\$BOOT_EFI"
+sbctl sign -s "$KERNEL_EFI" || { echo "Failed to sign Kernel."; exit 1; }
+[ -n "$SYSTEMD_EFI" ] && sbctl sign -s "$SYSTEMD_EFI"
+[ -n "$GRUB_EFI" ] && sbctl sign -s "$GRUB_EFI"
+[ -n "$BOOT_EFI" ] && sbctl sign -s "$BOOT_EFI"
 
-sbctl enroll-keys --microsoft || { echo "Fallo empadronamiento. Reinicie BIOS a Setup Mode."; exit 1; }
+sbctl enroll-keys --microsoft || { echo "Enrollment failed. Restart BIOS in Setup Mode."; exit 1; }
 
-echo "Forzando recompilación de NVIDIA para inyectar las nuevas firmas..."
+echo "Forcing NVIDIA recompilation to inject new signatures..."
 dkms remove -m nvidia --all >/dev/null 2>&1 || true
 dkms remove -m nvidia-open --all >/dev/null 2>&1 || true
-dkms autoinstall || { echo "Fallo DKMS al recompilar."; exit 1; }
+dkms autoinstall || { echo "DKMS recompilation failed."; exit 1; }
 
-echo "¡Secure Boot configurado y blindado!"
-EOF
+echo "Secure Boot configured and hardened!"
+HEREDOC
     chmod +x "/home/$REAL_USER/Desktop/terminar-secureboot.sh" || true
     chown "$REAL_USER:$REAL_USER" "/home/$REAL_USER/Desktop/terminar-secureboot.sh" || true
     
-    echo -e "1. Reinicia tu PC y entra a la BIOS."
-    echo -e "2. Borra las llaves de Secure Boot (Pon la BIOS en Setup Mode)."
-    echo -e "3. Inicia sesión en Arch y ejecuta el script ${YELLOW}'terminar-secureboot.sh'${NC} en tu Escritorio."
+    echo -e "1. Restart your PC and enter the BIOS."
+    echo -e "2. Clear Secure Boot keys (Set BIOS to Setup Mode)."
+    echo -e "3. Log into Arch and run the ${YELLOW}'terminar-secureboot.sh'${NC} script on your Desktop."
 fi
 
-# Desactivar la trampa de errores si todo salió bien
+# Disable the error trap if everything went well
 trap - EXIT INT TERM ERR
 
-print_success "🎉 INSTALACIÓN MAESTRA COMPLETADA. Reinicia tu PC. 🎉"
+print_success "MASTER INSTALLATION COMPLETED. Reboot your PC."
