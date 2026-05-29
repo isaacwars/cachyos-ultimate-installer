@@ -64,16 +64,19 @@ REAL_USER=${SUDO_USER:-$(whoami)}
 if [ "$REAL_USER" = "root" ] || [ -z "$REAL_USER" ]; then
     die "Fallo Crítico: Ejecuta este script como usuario normal usando 'sudo'. paru lo requiere."
 fi
+if [[ ! "$REAL_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]; then
+    die "Fallo Crítico: Nombre de usuario inválido detectado (posible vector de inyección)."
+fi
 
 if [ ! -d "/sys/firmware/efi" ]; then
     die "Fallo Crítico: Este script requiere un sistema instalado en modo UEFI."
 fi
 
 # Auto-reparación inicial de red (DNS fallback)
-if ! ping -c 1 archlinux.org >/dev/null 2>&1; then
+if ! ping -c 1 -W 5 archlinux.org >/dev/null 2>&1; then
     print_warn "Problemas de resolución DNS detectados. Aplicando auto-reparación (Fallback a Cloudflare 1.1.1.1)..."
     echo "nameserver 1.1.1.1" > /etc/resolv.conf
-    if ! ping -c 1 archlinux.org >/dev/null 2>&1; then
+    if ! ping -c 1 -W 5 archlinux.org >/dev/null 2>&1; then
         die "Fallo Crítico: Sin conexión a internet física."
     fi
     print_success "DNS reparado temporalmente."
@@ -125,7 +128,7 @@ run_pacman() {
 }
 
 run_paru() {
-    if sudo -u "$REAL_USER" bash -c "paru $@ --noconfirm"; then
+    if sudo -u "$REAL_USER" paru "$@" --noconfirm; then
         return 0
     fi
     
@@ -134,7 +137,7 @@ run_paru() {
     sudo -u "$REAL_USER" bash -c "paru -Sc --noconfirm" || true
     
     print_info "Reintentando compilación..."
-    if ! sudo -u "$REAL_USER" bash -c "paru $@ --noconfirm"; then
+    if ! sudo -u "$REAL_USER" paru "$@" --noconfirm; then
         die "Fallo Crítico: AUR falló irreversiblemente tras auto-reparación. Comando: paru $*"
     fi
 }
@@ -151,9 +154,9 @@ cd /tmp
 rm -rf /tmp/cachyos-repo* 2>/dev/null || true
 
 # Auto-reparación de descarga de repositorio
-if ! curl -sOf https://mirror.cachyos.org/cachyos-repo.tar.xz; then
+if ! curl --connect-timeout 10 --max-time 120 -sOf https://mirror.cachyos.org/cachyos-repo.tar.xz; then
     print_warn "Fallo de descarga principal. Reintentando desde GitHub RAW (Respaldo)..."
-    if ! curl -sOfL https://raw.githubusercontent.com/CachyOS/CachyOS-Repo/master/cachyos-repo.tar.xz; then
+    if ! curl --connect-timeout 10 --max-time 120 -sOfL https://raw.githubusercontent.com/CachyOS/CachyOS-Repo/master/cachyos-repo.tar.xz; then
         die "Fallo Crítico: No se pudo descargar el repositorio desde ningún origen."
     fi
 fi
@@ -181,7 +184,12 @@ echo -e "${CYAN}================================================================
 echo -e "Para empadronar las llaves en la placa base, la BIOS DEBE estar en 'Setup Mode'."
 echo -e "Si activas esto, los drivers de NVIDIA se firmarán automáticamente al compilarse."
 echo -e ""
-read -p "¿Tu BIOS está configurada en Setup Mode AHORA MISMO? (y/n): " setup_mode_ans
+if [ -t 0 ]; then
+    read -p "¿Tu BIOS está configurada en Setup Mode AHORA MISMO? (y/n): " setup_mode_ans
+else
+    print_warn "Entorno no-interactivo (headless) detectado. Secure Boot se pospone (script en escritorio)."
+    setup_mode_ans="n"
+fi
 
 DO_SECURE_BOOT=false
 if [[ "$setup_mode_ans" =~ ^[Yy]$ ]]; then
@@ -252,6 +260,7 @@ inject_bootloader() {
 
     if [ -f "/etc/default/grub" ]; then
         if ! grep -q "nvidia-drm.modeset=1" /etc/default/grub; then
+            cp /etc/default/grub /etc/default/grub.bak.$(date +%s) || true
             sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/&nvidia-drm.modeset=1 /' /etc/default/grub
             grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 || die "Fallo Crítico al reconstruir GRUB."
             print_success "Parámetros inyectados en GRUB."
@@ -298,12 +307,14 @@ configure_mkinitcpio() {
     fi
 
     if ! grep -q "nvidia_drm" "$mk_conf"; then
+        cp "$mk_conf" "${mk_conf}.bak.$(date +%s)" || true
         sed -i 's/^MODULES=(/MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm /' "$mk_conf" || true
         sed -i 's/^MODULES="/MODULES="nvidia nvidia_modeset nvidia_uvm nvidia_drm /' "$mk_conf" || true
         print_success "Módulos de NVIDIA (Early KMS) inyectados en $mk_conf."
     fi
 
     if ! grep -E -q "HOOKS=.*microcode" "$mk_conf"; then
+        cp "$mk_conf" "${mk_conf}.bak.$(date +%s)" || true
         sed -i 's/\(HOOKS=(.*autodetect\)/\1 microcode/' "$mk_conf" || true
         sed -i 's/\(HOOKS=".*autodetect\)/\1 microcode/' "$mk_conf" || true
         print_success "Hook de microcódigo inyectado en $mk_conf."
@@ -393,8 +404,10 @@ cleanpc() {
     local yellow="\033[1;33m"
     local nc="\033[0m"
 
-    if pacman -Qdtq >/dev/null 2>&1; then
-        sudo pacman -Rns $(pacman -Qdtq) --noconfirm || true
+    local orphans
+    orphans=$(pacman -Qdtq 2>/dev/null) || true
+    if [ -n "$orphans" ]; then
+        echo "$orphans" | xargs -r sudo pacman -Rns --noconfirm || true
     fi
 
     sudo paccache -ruk0 >/dev/null 2>&1 || true
@@ -435,14 +448,14 @@ print_success "Rutinas inyectadas."
 print_info "Fase 6: Empadronamiento y Sellado Final..."
 
 if [ "$DO_SECURE_BOOT" = true ]; then
-    KERNEL_EFI=$(find /boot -name "vmlinuz-linux-cachyos" | head -n 1)
+    KERNEL_EFI=$(find /boot -maxdepth 3 -name "vmlinuz-linux-cachyos" | head -n 1)
     if [ -z "$KERNEL_EFI" ]; then
         die "Fallo Crítico: Kernel vmlinuz-linux-cachyos no encontrado en /boot. Abortando firma."
     fi
 
-    SYSTEMD_EFI=$(find /boot/EFI -name "systemd-bootx64.efi" 2>/dev/null | head -n 1 || echo "")
-    GRUB_EFI=$(find /boot/EFI -iname "grubx64.efi" 2>/dev/null | head -n 1 || echo "")
-    BOOT_EFI=$(find /boot/EFI -name "BOOTX64.EFI" 2>/dev/null | head -n 1 || echo "")
+    SYSTEMD_EFI=$(find /boot/EFI -maxdepth 3 -name "systemd-bootx64.efi" 2>/dev/null | head -n 1 || echo "")
+    GRUB_EFI=$(find /boot/EFI -maxdepth 3 -iname "grubx64.efi" 2>/dev/null | head -n 1 || echo "")
+    BOOT_EFI=$(find /boot/EFI -maxdepth 3 -name "BOOTX64.EFI" 2>/dev/null | head -n 1 || echo "")
 
     print_info "Firmando binarios de arranque..."
     sbctl sign -s "$KERNEL_EFI" || die "Fallo Crítico: Fallo al firmar el Kernel."
@@ -470,10 +483,10 @@ mok_signing_key="/var/lib/sbctl/keys/db/db.key"
 mok_certificate="/var/lib/sbctl/keys/db/db.pem"
 INNEREOF
 
-KERNEL_EFI=\$(find /boot -name "vmlinuz-linux-cachyos" | head -n 1)
-SYSTEMD_EFI=\$(find /boot/EFI -name "systemd-bootx64.efi" 2>/dev/null | head -n 1 || echo "")
-GRUB_EFI=\$(find /boot/EFI -iname "grubx64.efi" 2>/dev/null | head -n 1 || echo "")
-BOOT_EFI=\$(find /boot/EFI -name "BOOTX64.EFI" 2>/dev/null | head -n 1 || echo "")
+KERNEL_EFI=\$(find /boot -maxdepth 3 -name "vmlinuz-linux-cachyos" | head -n 1)
+SYSTEMD_EFI=\$(find /boot/EFI -maxdepth 3 -name "systemd-bootx64.efi" 2>/dev/null | head -n 1 || echo "")
+GRUB_EFI=\$(find /boot/EFI -maxdepth 3 -iname "grubx64.efi" 2>/dev/null | head -n 1 || echo "")
+BOOT_EFI=\$(find /boot/EFI -maxdepth 3 -name "BOOTX64.EFI" 2>/dev/null | head -n 1 || echo "")
 
 sbctl sign -s "\$KERNEL_EFI" || { echo "Fallo al firmar Kernel."; exit 1; }
 [ -n "\$SYSTEMD_EFI" ] && sbctl sign -s "\$SYSTEMD_EFI"
