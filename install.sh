@@ -372,7 +372,10 @@ update() {
     echo -e "\n${yellow}[>] Updating system packages...${nc}"
     sudo pacman -Syuu --noconfirm || return 1
 
-    if command -v paru >/dev/null 2>&1; then
+    if command -v yay >/dev/null 2>&1; then
+        echo -e "\n${yellow}[>] Updating AUR (yay)...${nc}"
+        yay -Sua --noconfirm || return 1
+    elif command -v paru >/dev/null 2>&1; then
         echo -e "\n${yellow}[>] Updating AUR (paru)...${nc}"
         paru -Sua --noconfirm || return 1
     fi
@@ -410,15 +413,30 @@ cleanpc() {
         echo "$orphans" | xargs -r sudo pacman -Rns --noconfirm || true
     fi
 
-    sudo paccache -ruk0 >/dev/null 2>&1 || true
     sudo paccache -rk2 >/dev/null 2>&1 || true
+    sudo paccache -ruk0 >/dev/null 2>&1 || true
 
-    if command -v paru >/dev/null 2>&1; then
-        paru -Sc --noconfirm || true
+    if command -v yay >/dev/null 2>&1; then
+        yay -Sc --aur --noconfirm >/dev/null 2>&1 || true
+    elif command -v paru >/dev/null 2>&1; then
+        paru -Sc --noconfirm >/dev/null 2>&1 || true
     fi
 
     sudo journalctl --vacuum-time=7d >/dev/null 2>&1 || true
-    sudo rm -rf /tmp/* >/dev/null 2>&1 || true
+
+    if command -v systemd-tmpfiles >/dev/null 2>&1; then
+        sudo systemd-tmpfiles --clean >/dev/null 2>&1 || true
+    fi
+
+    find ~/.cache -not -path '*/.git*' -not -path '*/yay*' -not -path '*/paru*' -type f -atime +30 -delete 2>/dev/null || true
+    find ~/.cache -not -path '*/.git*' -not -path '*/yay*' -not -path '*/paru*' -type d -empty -delete 2>/dev/null || true
+
+    sudo find /var/lib/systemd/coredump -type f -delete 2>/dev/null || true
+
+    if command -v flatpak >/dev/null 2>&1; then
+        flatpak uninstall --unused -y >/dev/null 2>&1 || true
+    fi
+
     sudo fstrim -av >/dev/null 2>&1 || true
 
     echo -e "${green}[OK] System cleaned!${nc}"
