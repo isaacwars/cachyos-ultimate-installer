@@ -355,13 +355,25 @@ update() {
     local nc="\033[0m"
 
     echo -e "${yellow}[>] Checking internet connection...${nc}"
-    if ! ping -c 1 1.1.1.1 >/dev/null 2>&1; then
+    if ! ping -c 2 -W 2 1.1.1.1 >/dev/null 2>&1 && ! ping -c 2 -W 2 8.8.8.8 >/dev/null 2>&1; then
         echo -e "${red}[!] No internet connection. Aborting update.${nc}"
         return 1
     fi
 
     if [ -f /var/lib/pacman/db.lck ]; then
-        sudo rm -f /var/lib/pacman/db.lck
+        if command -v fuser >/dev/null 2>&1; then
+            if sudo fuser /var/lib/pacman/db.lck >/dev/null 2>&1; then
+                echo -e "${red}[!] Pacman database is actively locked by another process. Aborting.${nc}"
+                return 1
+            else
+                sudo rm -f /var/lib/pacman/db.lck
+            fi
+        elif pgrep -x pacman >/dev/null 2>&1 || pgrep -x yay >/dev/null 2>&1 || pgrep -x paru >/dev/null 2>&1; then
+            echo -e "${red}[!] Pacman/AUR process is currently running. Aborting.${nc}"
+            return 1
+        else
+            sudo rm -f /var/lib/pacman/db.lck
+        fi
     fi
 
     if command -v cachyos-rate-mirrors >/dev/null 2>&1; then
@@ -370,14 +382,19 @@ update() {
     fi
 
     echo -e "\n${yellow}[>] Updating system packages...${nc}"
-    sudo pacman -Syuu --noconfirm || return 1
+    sudo pacman -Syu --noconfirm || return 1
 
+    local aur_failed=0
     if command -v yay >/dev/null 2>&1; then
         echo -e "\n${yellow}[>] Updating AUR (yay)...${nc}"
-        yay -Sua --noconfirm || return 1
+        yay -Sua --noconfirm || aur_failed=1
     elif command -v paru >/dev/null 2>&1; then
         echo -e "\n${yellow}[>] Updating AUR (paru)...${nc}"
-        paru -Sua --noconfirm || return 1
+        paru -Sua --noconfirm || aur_failed=1
+    fi
+
+    if [ "$aur_failed" -eq 1 ]; then
+        echo -e "${yellow}[!] Warning: Some AUR packages failed to update.${nc}"
     fi
 
     if command -v checkrebuild >/dev/null 2>&1; then
@@ -389,7 +406,8 @@ update() {
             echo -e "\n${yellow}[>] Updating systemd-boot bootloader...${nc}"
             sudo bootctl update || return 1
             if command -v sbctl >/dev/null 2>&1; then
-                sudo sbctl sign-all >/dev/null 2>&1 || echo -e "${red}[!] Failed to re-sign bootloader.${nc}"
+                echo -e "${yellow}[>] Verifying and signing bootloader binaries...${nc}"
+                sudo sbctl sign-all || { echo -e "${red}[!] Critical: Failed to sign bootloader.${nc}"; return 1; }
             fi
         fi
     fi
