@@ -344,129 +344,263 @@ print_success "Intel NPU successfully installed."
 # ==============================================================================
 print_info "Phase 5: Injecting robust update() and cleanpc() routines..."
 
-ROUTINES_CODE='
+read -r -d '' ROUTINES_CODE << 'ROUTINES_EOF' || true
+
 # ==========================================
 # CACHYOS MAINTENANCE ROUTINES
 # ==========================================
-update() {
-    local red="\033[0;31m"
-    local green="\033[0;32m"
-    local yellow="\033[1;33m"
-    local nc="\033[0m"
+cleanpc() {
+    local red='\033[0;31m' green='\033[0;32m' yellow='\033[1;33m' cyan='\033[0;36m' nc='\033[0m'
+    local orphans inconsistencies
 
-    echo -e "${yellow}[>] Checking internet connection...${nc}"
-    if ! ping -c 2 -W 2 1.1.1.1 >/dev/null 2>&1 && ! ping -c 2 -W 2 8.8.8.8 >/dev/null 2>&1; then
-        echo -e "${red}[!] No internet connection. Aborting update.${nc}"
+    echo -e "${cyan}╔══════════════════════════════╗"
+    echo -e "║       🧹  CleanPc  🧹       ║"
+    echo -e "╚══════════════════════════════╝${nc}"
+
+    echo -e "\n${yellow}[>] Removing orphaned packages...${nc}"
+    orphans=$(pacman -Qdtq 2>/dev/null || true)
+    if [ -n "$orphans" ]; then
+        echo "$orphans"
+        echo "$orphans" | xargs -r sudo pacman -Rns --noconfirm 2>/dev/null && echo -e "${green}Done.${nc}" || echo -e "${red}Some failed.${nc}"
+    else
+        echo -e "${green}No orphans found.${nc}"
+    fi
+
+    echo -e "\n${yellow}[>] Cleaning pacman cache...${nc}"
+    if command -v paccache &>/dev/null; then
+        sudo paccache -rk2
+        sudo paccache -ruk0
+    else
+        sudo pacman -Sc --noconfirm 2>/dev/null && echo -e "${green}Done.${nc}"
+    fi
+
+    if command -v yay &>/dev/null; then
+        echo -e "\n${yellow}[>] Cleaning yay cache (AUR build artifacts)...${nc}"
+        yay -Sc --aur --noconfirm
+    elif command -v paru &>/dev/null; then
+        echo -e "\n${yellow}[>] Cleaning paru cache...${nc}"
+        paru -Sc --noconfirm
+    fi
+
+    echo -e "\n${yellow}[>] Cleaning journal logs (7 days)...${nc}"
+    sudo journalctl --vacuum-time=7d 2>/dev/null && echo -e "${green}Done.${nc}"
+
+    echo -e "\n${yellow}[>] Cleaning /tmp safely...${nc}"
+    if command -v systemd-tmpfiles &>/dev/null; then
+        sudo systemd-tmpfiles --clean 2>/dev/null && echo -e "${green}Done.${nc}"
+    fi
+
+    echo -e "\n${yellow}[>] Cleaning user cache...${nc}"
+    find ~/.cache -not -path '*/.git*' -not -path '*/yay*' -not -path '*/paru*' -type f -atime +30 -delete 2>/dev/null || true
+    find ~/.cache -not -path '*/.git*' -not -path '*/yay*' -not -path '*/paru*' -type d -empty -delete 2>/dev/null || true
+    echo -e "${green}Done.${nc}"
+
+    echo -e "\n${yellow}[>] Cleaning core dumps...${nc}"
+    sudo find /var/lib/systemd/coredump -type f -delete 2>/dev/null || true
+    echo -e "${green}Done.${nc}"
+
+    if command -v flatpak &>/dev/null; then
+        echo -e "\n${yellow}[>] Cleaning flatpak...${nc}"
+        flatpak uninstall --unused -y 2>/dev/null
+    fi
+
+    echo -e "\n${yellow}[>] Checking for system package inconsistencies...${nc}"
+    inconsistencies=$(LC_ALL=C pacman -Qk 2>/dev/null | grep -v '0 missing files')
+    if [ -n "$inconsistencies" ]; then
+        echo -e "${red}Inconsistencies detected in installed packages:${nc}"
+        echo "$inconsistencies"
+    else
+        echo -e "${green}No package inconsistencies found (all files present).${nc}"
+    fi
+
+    echo -e "\n${yellow}[>] Running fstrim...${nc}"
+    sudo fstrim -av 2>/dev/null || echo -e "${yellow}Not supported.${nc}"
+
+    echo -e "\n${cyan}─────────────────────────────────${nc}"
+    echo -e "${green}✅  System cleaned!${nc}\n"
+}
+
+update() {
+    local red='\033[0;31m' green='\033[0;32m' yellow='\033[1;33m' cyan='\033[0;36m' nc='\033[0m'
+    local has_warnings=0
+
+    # 1. Prevent running as root directly (breaks AUR helpers)
+    if [ "$EUID" -eq 0 ]; then
+        echo -e "${red}❌ Error: Do not run this function as root/sudo. Run it as a normal user.${nc}"
         return 1
     fi
 
+    echo -e "${cyan}╔══════════════════════════════╗"
+    echo -e "║    🔄  System Update  🔄     ║"
+    echo -e "╚══════════════════════════════╝${nc}"
+
+    # 2. Check network connectivity (with multi-IP fallback)
+    echo -e "\n${yellow}[>] Checking network connectivity...${nc}"
+    if ! ping -c 2 -W 2 1.1.1.1 &>/dev/null && ! ping -c 2 -W 2 8.8.8.8 &>/dev/null; then
+        echo -e "${red}❌ No internet connection detected. Aborting.${nc}"
+        return 1
+    fi
+
+    # 3. Check and remove stale pacman lock safely (sudo fuser to inspect root processes)
     if [ -f /var/lib/pacman/db.lck ]; then
-        if command -v fuser >/dev/null 2>&1; then
-            if sudo fuser /var/lib/pacman/db.lck >/dev/null 2>&1; then
-                echo -e "${red}[!] Pacman database is actively locked by another process. Aborting.${nc}"
+        echo -e "\n${yellow}[>] Checking pacman database lock...${nc}"
+        if command -v fuser &>/dev/null; then
+            if sudo fuser /var/lib/pacman/db.lck &>/dev/null; then
+                echo -e "${red}❌ Error: Pacman database is actively locked by another process. Aborting.${nc}"
                 return 1
             else
+                echo -e "${yellow}Removing stale pacman database lock...${nc}"
                 sudo rm -f /var/lib/pacman/db.lck
             fi
-        elif pgrep -x pacman >/dev/null 2>&1 || pgrep -x yay >/dev/null 2>&1 || pgrep -x paru >/dev/null 2>&1; then
-            echo -e "${red}[!] Pacman/AUR process is currently running. Aborting.${nc}"
+        elif pgrep -x pacman &>/dev/null || pgrep -x yay &>/dev/null || pgrep -x paru &>/dev/null; then
+            echo -e "${red}❌ Error: Pacman/AUR process is currently running. Aborting.${nc}"
             return 1
         else
+            echo -e "${yellow}Removing stale pacman database lock...${nc}"
             sudo rm -f /var/lib/pacman/db.lck
         fi
     fi
 
-    if command -v cachyos-rate-mirrors >/dev/null 2>&1; then
+    # 4. Rank/rate CachyOS and Arch mirrors FIRST if cachyos-rate-mirrors is available
+    if command -v cachyos-rate-mirrors &>/dev/null; then
         echo -e "\n${yellow}[>] Ranking CachyOS mirrors...${nc}"
-        sudo cachyos-rate-mirrors || return 1
+        sudo cachyos-rate-mirrors
     fi
 
+    # 5. Core system update (Keyrings + Packages)
     echo -e "\n${yellow}[>] Updating system packages...${nc}"
-    sudo pacman -Syu --noconfirm || return 1
+    sudo pacman -Syu --noconfirm || {
+        echo -e "${red}❌ Pacman update failed.${nc}"
+        return 1
+    }
 
-    local aur_failed=0
-    if command -v yay >/dev/null 2>&1; then
+    # 6. Update AUR packages via helper (yay or paru) with failure tracking
+    if command -v yay &>/dev/null; then
         echo -e "\n${yellow}[>] Updating AUR (yay)...${nc}"
-        yay -Sua --noconfirm || aur_failed=1
-    elif command -v paru >/dev/null 2>&1; then
+        if ! yay -Sua --noconfirm; then
+            echo -e "${yellow}⚠ Warning: Some AUR packages failed to update.${nc}"
+            has_warnings=1
+        fi
+    elif command -v paru &>/dev/null; then
         echo -e "\n${yellow}[>] Updating AUR (paru)...${nc}"
-        paru -Sua --noconfirm || aur_failed=1
-    fi
-
-    if [ "$aur_failed" -eq 1 ]; then
-        echo -e "${yellow}[!] Warning: Some AUR packages failed to update.${nc}"
-    fi
-
-    if command -v checkrebuild >/dev/null 2>&1; then
-        checkrebuild || true
-    fi
-
-    if command -v bootctl >/dev/null 2>&1 && bootctl status >/dev/null 2>&1; then
-        if bootctl status | grep -q "Current Boot Loader:.*systemd-boot"; then
-            echo -e "\n${yellow}[>] Updating systemd-boot bootloader...${nc}"
-            sudo bootctl update || return 1
-            if command -v sbctl >/dev/null 2>&1; then
-                echo -e "${yellow}[>] Verifying and signing bootloader binaries...${nc}"
-                sudo sbctl sign-all || { echo -e "${red}[!] Critical: Failed to sign bootloader.${nc}"; return 1; }
-            fi
+        if ! paru -Sua --noconfirm; then
+            echo -e "${yellow}⚠ Warning: Some AUR packages failed to update.${nc}"
+            has_warnings=1
         fi
     fi
 
-    if command -v fwupdmgr >/dev/null 2>&1; then
+    # 7. Check for packages that need rebuilding (rebuild-detector)
+    if command -v checkrebuild &>/dev/null; then
+        echo -e "\n${yellow}[>] Checking for AUR packages that need rebuilding...${nc}"
+        local rebuilds
+        rebuilds=$(checkrebuild 2>/dev/null || true)
+        if [ -n "$rebuilds" ]; then
+            echo -e "${yellow}⚠ Warning: Packages needing rebuild:${nc}"
+            echo "$rebuilds"
+            has_warnings=1
+        else
+            echo -e "${green}No packages need rebuilding.${nc}"
+        fi
+    fi
+
+    # 8. Update bootloader and sign EFI binaries with sbctl (without silencing errors)
+    if command -v bootctl &>/dev/null && bootctl status 2>/dev/null | grep -q "Product:.*systemd-boot"; then
+        echo -e "\n${yellow}[>] Updating systemd-boot bootloader...${nc}"
+        if sudo bootctl --graceful update; then
+            if command -v sbctl &>/dev/null; then
+                echo -e "${yellow}[>] Verifying and signing EFI binaries with sbctl...${nc}"
+                if ! sudo sbctl sign-all; then
+                    echo -e "${red}❌ CRITICAL: Secure Boot signing failed! System may not boot with Secure Boot enabled.${nc}"
+                    has_warnings=1
+                fi
+            fi
+        else
+            echo -e "${yellow}⚠ Warning: bootctl update had issues.${nc}"
+            has_warnings=1
+        fi
+    fi
+
+    # 9. Firmware updates via fwupd
+    if command -v fwupdmgr &>/dev/null; then
+        echo -e "\n${yellow}[>] Checking for hardware firmware updates...${nc}"
         fwupdmgr refresh && fwupdmgr get-updates || true
     fi
 
-    echo -e "${green}[OK] Update completed successfully!${nc}"
+    # 10. Update flatpak packages
+    if command -v flatpak &>/dev/null; then
+        echo -e "\n${yellow}[>] Updating flatpak...${nc}"
+        flatpak update -y || has_warnings=1
+    fi
+
+    # 11. Update global npm packages (check write access)
+    if command -v npm &>/dev/null; then
+        local npm_prefix
+        npm_prefix="$(npm config get prefix 2>/dev/null || echo '/usr')"
+        if [ -w "$npm_prefix" ] || [ -w "$npm_prefix/lib/node_modules" 2>/dev/null ]; then
+            echo -e "\n${yellow}[>] Checking for global npm package updates...${nc}"
+            npm update -g || has_warnings=1
+        else
+            echo -e "\n${yellow}[i] Skipping npm update -g: user lacks write access to $npm_prefix.${nc}"
+        fi
+    fi
+
+    # 12. Checking for unmerged .pacnew/.pacsave files (using pacdiff -o when available)
+    echo -e "\n${yellow}[>] Checking for unmerged .pacnew/.pacsave files...${nc}"
+    local pacnews=""
+    if command -v pacdiff &>/dev/null; then
+        pacnews=$(pacdiff -o 2>/dev/null)
+    else
+        pacnews=$(sudo find /etc -regextype posix-extended -regex ".+\.pac(new|save)" 2>/dev/null)
+    fi
+
+    if [ -n "$pacnews" ]; then
+        echo -e "${yellow}⚠ Warning: Unmerged configuration files found:${nc}"
+        echo "$pacnews"
+        echo -e "${yellow}ℹ Tip: Run 'pacdiff' or 'meld' to merge them.${nc}"
+        has_warnings=1
+    else
+        echo -e "${green}No .pacnew/.pacsave files found.${nc}"
+    fi
+
+    # 13. Check for failed systemd services
+    echo -e "\n${yellow}[>] Checking for failed systemd services...${nc}"
+    local failed_units
+    failed_units=$(systemctl --failed --no-legend --plain 2>/dev/null)
+    if [ -n "$failed_units" ]; then
+        echo "$failed_units"
+        has_warnings=1
+    else
+        echo -e "${green}No failed systemd services.${nc}"
+    fi
+
+    # 14. Check if reboot is recommended (kernel upgrade check)
+    echo -e "\n${yellow}[>] Checking kernel status...${nc}"
+    local running
+    running=$(uname -r)
+    if [ ! -d "/lib/modules/$running" ] || [ ! -f "/lib/modules/$running/modules.dep" ]; then
+        local installed
+        installed=$(ls /lib/modules/ 2>/dev/null | sort -V | tail -1)
+        echo -e "${yellow}⚠ Kernel updated (Running: $running | Installed: $installed)${nc}"
+        echo -e "${yellow}⚠ REBOOT RECOMMENDED: sudo reboot${nc}"
+    else
+        echo -e "${green}Kernel is up to date (Running: $running).${nc}"
+    fi
+
+    echo -e "\n${cyan}─────────────────────────────────${nc}"
+    if [ "$has_warnings" -eq 0 ]; then
+        echo -e "${green}✅  System updated!${nc}\n"
+    else
+        echo -e "${yellow}⚠  System update completed with warnings. Check output above.${nc}\n"
+    fi
 }
-
-cleanpc() {
-    local red="\033[0;31m"
-    local green="\033[0;32m"
-    local yellow="\033[1;33m"
-    local nc="\033[0m"
-
-    local orphans
-    orphans=$(pacman -Qdtq 2>/dev/null) || true
-    if [ -n "$orphans" ]; then
-        echo "$orphans" | xargs -r sudo pacman -Rns --noconfirm || true
-    fi
-
-    sudo paccache -rk2 >/dev/null 2>&1 || true
-    sudo paccache -ruk0 >/dev/null 2>&1 || true
-
-    if command -v yay >/dev/null 2>&1; then
-        yay -Sc --aur --noconfirm >/dev/null 2>&1 || true
-    elif command -v paru >/dev/null 2>&1; then
-        paru -Sc --noconfirm >/dev/null 2>&1 || true
-    fi
-
-    sudo journalctl --vacuum-time=7d >/dev/null 2>&1 || true
-
-    if command -v systemd-tmpfiles >/dev/null 2>&1; then
-        sudo systemd-tmpfiles --clean >/dev/null 2>&1 || true
-    fi
-
-    find ~/.cache -not -path '*/.git*' -not -path '*/yay*' -not -path '*/paru*' -type f -atime +30 -delete 2>/dev/null || true
-    find ~/.cache -not -path '*/.git*' -not -path '*/yay*' -not -path '*/paru*' -type d -empty -delete 2>/dev/null || true
-
-    sudo find /var/lib/systemd/coredump -type f -delete 2>/dev/null || true
-
-    if command -v flatpak >/dev/null 2>&1; then
-        flatpak uninstall --unused -y >/dev/null 2>&1 || true
-    fi
-
-    sudo fstrim -av >/dev/null 2>&1 || true
-
-    echo -e "${green}[OK] System cleaned!${nc}"
-}
-'
+ROUTINES_EOF
 
 inject_routines() {
     local target="$1"
     if [ -d "$(dirname "$target")" ]; then
         touch "$target"
-        if ! grep -q "CACHYOS MAINTENANCE ROUTINES" "$target"; then
-            echo "$ROUTINES_CODE" >> "$target"
+        if ! grep -q "CACHYOS MAINTENANCE ROUTINES" "$target" && ! grep -q "^cleanpc()" "$target"; then
+            printf '\n%s\n' "$ROUTINES_CODE" >> "$target"
         fi
     fi
 }
